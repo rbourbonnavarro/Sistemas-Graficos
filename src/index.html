@@ -1,0 +1,524 @@
+<!doctype html>
+<meta content="text/html;charset=UTF-8" http-equiv="Content-Type">
+<meta content="UTF-8" http-equiv="encoding">
+
+<html>
+	<head>
+        <link rel="stylesheet" type="text/css" href="pageStyle.css">
+		<title>Test para clase objeto 3D</title>
+        <script type="text/javascript" src="gl-matrix.js"></script>
+        <script type="text/javascript" src="GraphicObject.js"></script>
+        <script type="text/javascript" src="GridObject.js"></script>
+        <script type="text/javascript" src="Sphere.js"></script>
+        <script type="text/javascript" src="Cylinder.js"></script>
+        <script type="text/javascript" src="Cube.js"></script>
+        <script type="text/javascript" src="ShelfPartition.js"></script>
+        <script type="text/javascript" src="Shelf.js"></script>
+        <script type="text/javascript" src="Printer.js"></script>
+        <script type="text/javascript" src="Plane.js"></script>
+        <script type="text/javascript" src="LineObject.js"></script>
+        <script type="text/javascript" src="Segment.js"></script>
+        <script type="text/javascript" src="Circumference.js"></script>
+        <script type="text/javascript" src="CubicBezier.js"></script>
+        <script type="text/javascript" src="Camera.js"></script>
+        <script type="text/javascript" src="Scene.js"></script>
+        <script type="text/javascript" src="Curve.js"></script>
+        <script type="text/javascript" src="BSpline.js"></script>
+        <script type="text/javascript" src="RevolutionSurface.js"></script>
+        <script type="text/javascript" src="Extrusion.js"></script>
+        <script type="text/javascript" src="Robot.js"></script>
+        <script type="text/javascript" src="Polyline.js"></script>
+        <script type="text/javascript" src="Material.js"></script>
+        <script type="text/javascript" src="gl-program.js"></script>
+        <script type="text/javascript" src="dat.gui.js"></script>
+
+        <!-- SHADER DE VERTICES -->
+        <script id="v-shader" type="vertex-shader">
+            // Los atributos son características propias de cada vertice.
+            attribute vec3 aVertexPosition;
+            attribute vec3 aVertexColor;
+            attribute vec2 aVertexTexCoord;
+            attribute vec3 aVertexNormal;
+            attribute vec3 aVertexTangent;
+
+            // Los uniforms son características propias de una etapa de dibujado completa.
+            // Son comunes a todos los vertices involucrados en el dibujado.
+            uniform mat4 uMVMatrix;
+            uniform mat4 uMMatrix;
+            uniform mat4 uPMatrix;
+            uniform mat3 uNMatrix;
+            uniform mat3 uNMMatrix;
+
+            // Los varying son propiedades que toman valor para cada fragmento a partir
+            // de interpolar linealmente entre los valores que se les asigna en cada 
+            // vértice del polígono al cual pertenecen.
+            varying highp vec4 vColor;
+            varying vec2 vVertexTexCoord;
+            varying highp vec3 vPos;
+            varying highp vec4 vPosModel;
+            varying highp vec4 vPosModelView;
+            varying highp vec3 vNormal;
+            varying highp vec3 vNormalModel;
+            varying highp vec3 vTangent;
+ 
+            void main(void) {
+
+                vPosModel = uMMatrix * vec4(aVertexPosition, 1.0);
+                vPosModelView = uMVMatrix * vec4(aVertexPosition, 1.0);
+
+                // gl_Position es una variable "built-in" de GLSL que es usada para 
+                // almacenar la posición resultante del fragmento.
+                gl_Position = uPMatrix * vPosModelView;
+
+                vPos = aVertexPosition;
+                vColor = vec4(aVertexColor,1.0);
+                vVertexTexCoord = aVertexTexCoord;
+                vNormal = uNMatrix * aVertexNormal;
+                vNormalModel = uNMMatrix * aVertexNormal;
+                vTangent = uNMatrix * aVertexTangent;
+
+            }
+        </script>
+        <!-- FIN SHADER DE VERTICES -->
+
+        <!-- SHADER DE FRAGMENTOS -->
+        <script id="f-shader" type="fragment-shader">
+            precision mediump float;
+
+            uniform float uDiscardLevel;
+
+            uniform bool uUseLighting;
+
+            const int NUM_LIGHTS = 4;
+
+            struct LightInfo {
+                vec3 position;  // Light position in eye coords.
+                vec3 kd;
+                vec3 ka;
+                vec3 ks;
+                float intensity; // Light intensity
+            };
+
+            struct MaterialInfo {
+                vec3 kd;
+                vec3 ka;
+                vec3 ks;
+                float shininess;
+                bool useDiffuseTexture;
+                bool useNormalTexture;
+                bool useReflection;
+                sampler2D texDiffuse;
+                float diffuseMapIntensity;
+                sampler2D texNormal;
+                samplerCube cubemap;
+            };
+
+            uniform LightInfo uLights[NUM_LIGHTS];
+            uniform MaterialInfo uMaterial;
+
+            uniform vec3 uCameraPos;    // Model position
+
+            varying highp vec4 vColor;
+            varying vec2 vVertexTexCoord;
+            varying highp vec3 vPos;
+            varying highp vec4 vPosModel;
+            varying highp vec4 vPosModelView;
+            varying highp vec3 vNormal;
+            varying highp vec3 vNormalModel;
+            varying highp vec3 vTangent;
+
+            vec3 ads(vec3 position, vec3 norm, LightInfo light, vec3 fragColor)
+            {
+              vec3 n = normalize(norm);
+              vec3 s = normalize(light.position - position);
+              vec3 v = normalize(-position);
+              vec3 r = reflect(-s, norm);
+              float I = light.intensity;
+
+              float sDotN = max(dot(s, n), 0.0);
+              vec3 specular = vec3(0.0);
+              if(sDotN > 0.0) {
+                specular = light.ks * uMaterial.ks * pow(max(dot(r,v), 0.0), uMaterial.shininess);
+              }
+
+              return
+                  I *
+                  (light.ka * uMaterial.ka +
+                  light.kd * fragColor * sDotN +
+                  specular);
+            }
+
+            void main(void){
+                if(vPos.y > uDiscardLevel) discard;
+
+                vec4 texColor;
+                vec3 lookup;
+                vec4 cubemapColor = vec4(1.0);
+                vec4 normalMap;
+
+                vec3 posModelView = vec3(vPosModelView);
+                vec3 posModel = vec3(vPosModel);
+                
+                vec3 Normal = normalize(vNormal);
+                vec3 NormalModel = normalize(vNormalModel);
+                vec3 Tangent = normalize(vTangent);
+                vec3 Normal_tex = Normal;
+                vec3 posModelView_tex = posModelView;
+
+                vec3 binormal = normalize(cross(Normal, Tangent));
+                vec4 a = vec4(1.0,0.0,0.0,1.0);
+                mat3 tangent_space;
+                tangent_space[0] = Tangent;
+                tangent_space[1] = binormal;
+                tangent_space[2] = Normal;
+
+                if(uMaterial.useDiffuseTexture) {
+                    texColor = texture2D(uMaterial.texDiffuse, vVertexTexCoord);
+                }
+
+                if(uMaterial.useNormalTexture) {
+                    normalMap = texture2D(uMaterial.texNormal, vVertexTexCoord);
+                    normalMap = normalMap * 2.0 - vec4(1.0, 1.0, 1.0, 1.0);
+                    Normal_tex = normalize(tangent_space * normalMap.rgb);
+                    posModelView_tex = tangent_space * posModelView;
+                }
+
+                if(uMaterial.useReflection) {
+                    lookup = reflect(-normalize(uCameraPos - posModel), NormalModel);
+                    cubemapColor = textureCube(uMaterial.cubemap, -lookup);
+                }
+                
+                vec3 finalColor = vec3(0.0, 0.0, 0.0);
+                vec3 finalColor2 = vec3(0.0, 0.0, 0.0);
+                
+                if(uUseLighting) {
+
+                    for(int i = 0; i<NUM_LIGHTS; i++) {
+                        
+                        LightInfo light;
+                        light.position = uLights[i].position;
+                        light.kd = uLights[i].kd;
+                        light.ka = uLights[i].ka;
+                        light.ks = uLights[i].ks;
+                        light.intensity = uLights[i].intensity;
+
+                        if(uMaterial.useNormalTexture){
+                            
+                            /*finalColor += ads(posModelView_tex, Normal_tex, light, uMaterial.kd);
+
+                            if(uMaterial.useDiffuseTexture) {
+                                finalColor2 += ads(posModelView_tex, Normal_tex, light, texColor.rgb);
+                            }*/
+                            
+                            if(uMaterial.useDiffuseTexture) {
+                                finalColor += ads(posModelView, Normal, light, uMaterial.kd * cubemapColor.rgb);                                
+                                finalColor2 += ads(posModelView, Normal_tex, light, texColor.rgb * cubemapColor.rgb);
+                            } else {
+                                finalColor += ads(posModelView, Normal_tex, light, uMaterial.kd * cubemapColor.rgb);
+                            }
+                                
+                        } else {
+                            
+                            finalColor += ads(posModelView, Normal, light, uMaterial.kd * cubemapColor.rgb);
+
+                            if(uMaterial.useDiffuseTexture) {
+                                finalColor2 += ads(posModelView, Normal, light, texColor.rgb * cubemapColor.rgb);
+                            }
+
+                        }
+
+                    }
+
+                    gl_FragColor = vec4(finalColor * (1.0 - uMaterial.diffuseMapIntensity), 1.0) + vec4(finalColor2 * uMaterial.diffuseMapIntensity, 1.0);
+
+                    //gl_FragColor = vec4(Normal_tex,1.0);
+
+                } else {
+                    gl_FragColor = vec4(uMaterial.kd, 1.0);
+                }
+
+            }
+        </script>
+        <!-- FIN SHADER DE FRAGMENTOS -->
+
+        <script type="text/javascript">
+        //Cuando terminemos d eprobar, esto vuela
+
+        //LAS UNICAS DOS (O 3, cuando vea como fletar scene tmb lo saco) VARIABLES GLOBALES QUE DEBEN EXISTIR EN TODO EL PUTO CODIGO
+        var gl, program, textures = {}, scene;
+        
+        function main() {
+        	var canvas = document.getElementById('my_canvas');
+        	try{
+        	       gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+        	}catch(e){}
+
+        	if(gl){
+                setupTextures();
+                
+                var gui = new dat.GUI();
+                
+                var folderPrinter = gui.addFolder('Printer');
+                folderPrinter.add(control, 'objectToPrintString', ['A1','A2','A3','B1','B2','B3']).name('Object to print');
+                folderPrinter.add(control, 'radiusProfile', ['C1','C2','C3','No profile']).name('Object radius profile');
+                folderPrinter.add(control, 'torsionAngle', 0, Math.PI).name('Torsion angle').step(0.1);
+                folderPrinter.add(control, 'diffuseMap', ['Alicia', 'Marble', 'Gotas', 'Wool', 'No texture']).name('Texture');
+                folderPrinter.add(control, 'diffuseMapIntensity', 0, 1).name('Texture intensity').step(0.1);
+                folderPrinter.addColor(control, 'kd').name('Base color');
+                folderPrinter.addColor(control, 'ks').name('Specular color');
+                folderPrinter.add(control, 'shininess').name('Shininess');
+
+                var folderCamera = gui.addFolder('Camera');
+                folderCamera.add(control, 'velocityFactor', 0.1, 10.0).name('First person camera velocity').step(0.1);
+                gui.add(control, 'print').name('Print object');
+
+                var folderPunctualLights = gui.addFolder("Punctual lights");
+                folderPunctualLights.add(control, 'lightIntensity1', 0, 1).name('Light 1 intensity').step(0.01);
+                folderPunctualLights.add(control, 'lightIntensity2', 0, 1).name('Light 2 intensity').step(0.01);
+                folderPunctualLights.add(control, 'lightIntensity3', 0, 1).name('Light 3 intensity').step(0.01);
+                folderPunctualLights.add(control, 'lightIntensity4', 0, 1).name('Light 4 intensity').step(0.01);
+
+                folderPrinter.open();
+                folderCamera.open();
+                folderPunctualLights.open();
+
+                var webGlProgram = new WebGlProgram();
+                scene = webGlProgram.getScene();
+                //scene.drawScene();
+                tick();
+        	}
+        	else{
+        		alert("Error: Your browser does not appear to support WebGL.");
+        	}
+
+        }
+
+        function tick() {
+            requestAnimationFrame(tick);
+            scene.animate();
+            scene.drawScene();
+        }
+
+        function handleLoadedTexture(image, texture, clamp_edges) {
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+            if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+                // Yes, it's a power of 2. Generate mips.
+                gl.generateMipmap(gl.TEXTURE_2D);
+            } else {
+                // No, it's not a power of 2. Turn off mips and set wrapping to clamp to edge
+                if (clamp_edges) {
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+                }
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            }
+            gl.bindTexture(gl.TEXTURE_2D, null);
+        }
+
+        function isPowerOf2(value) {
+
+            return (value & (value - 1)) == 0;
+
+        }            
+        
+        function loadTexture(path, clamp_edges) {
+            var texture = gl.createTexture();
+            var image = new Image();
+            image.onload = function() {
+                handleLoadedTexture(image, texture, clamp_edges);
+            }
+            image.src = path;
+            
+            return texture;
+        }
+
+        function setupTextures() {
+
+            let texturesMainDirectory = "textures/";
+            let cubemapsDirectory = "cubemaps/";
+            
+            textures["alfombraBlanca"] = loadTexture(texturesMainDirectory + "alfombraBlanca.jpg", true);
+            textures["alfombraBlanca_normal"] = loadTexture(texturesMainDirectory + "alfombraBlanca_normal.jpg", true);
+            textures["baldosaSquare"] = loadTexture(texturesMainDirectory + "baldosaSquare.jpg", true);
+            textures["baldosaSquare_normal"] = loadTexture(texturesMainDirectory + "baldosaSquare_normal.jpg", true);
+            textures["parquet"] = loadTexture(texturesMainDirectory + "parquet.jpg", true);
+            textures["parquet_normal"] = loadTexture(texturesMainDirectory + "parquet_normal.jpg", true);
+            textures["alicia"] = loadTexture(texturesMainDirectory + "alicia.jpg", true);
+            textures["alicia_normal"] = loadTexture(texturesMainDirectory + "alicia_normal.jpg", true);
+            textures["marmol"] = loadTexture(texturesMainDirectory + "marmol.jpg", true);
+            textures["marmol_normal"] = loadTexture(texturesMainDirectory + "marmol_normal.jpg", true);
+            textures["gotas"] = loadTexture(texturesMainDirectory + "gotas.jpg", true);
+            textures["gotas_normal"] = loadTexture(texturesMainDirectory + "gotas_normal.jpg", true);
+            textures["madera"] = loadTexture(texturesMainDirectory + "madera.jpg", true);
+            textures["madera_normal"] = loadTexture(texturesMainDirectory + "madera_normal.jpg", true);
+            textures["cubierta_normal"] = loadTexture(texturesMainDirectory + "cubierta_normal.jpg", true);
+            textures["metalPintado"] = loadTexture(texturesMainDirectory + "metalPintado.jpg", true);
+
+            textures["cubemap_parque"] = loadCubeTextures(texturesMainDirectory + cubemapsDirectory + "parque/", "jpg");
+
+        }
+
+        function loadCubeTextures(directory, extension) {
+
+            var cubeTexture = gl.createTexture();
+
+            let cubeFaces = [
+                [directory + "pos-x." + extension, gl.TEXTURE_CUBE_MAP_POSITIVE_X],
+                [directory + "neg-x." + extension, gl.TEXTURE_CUBE_MAP_NEGATIVE_X],
+                [directory + "pos-y." + extension, gl.TEXTURE_CUBE_MAP_POSITIVE_Y],
+                [directory + "neg-y." + extension, gl.TEXTURE_CUBE_MAP_NEGATIVE_Y],
+                [directory + "pos-z." + extension, gl.TEXTURE_CUBE_MAP_POSITIVE_Z],
+                [directory + "neg-z." + extension, gl.TEXTURE_CUBE_MAP_NEGATIVE_Z]
+            ];console.log(cubeFaces);
+
+            for (var i = 0; i < cubeFaces.length; i++) {
+
+                var face = cubeFaces[i][1];
+                var image = new Image();
+                image.onload = function(texture, face, image) {console.log("dasd");
+                    return function() {
+                        gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+                        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+                        gl.texImage2D(face, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);console.log(image);
+                        gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                        gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                        gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+                        gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                        gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                        gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+                    }
+                } (cubeTexture, face, image);
+                image.src = cubeFaces[i][0];
+
+            }
+            
+            return cubeTexture;
+
+        }
+
+        var Control = function(){
+            this.objectToPrintString = "A1";
+            this.objectToPrint = {
+                revolution: {
+                    draw: false,
+                    curve: null
+                },
+                extrusion: {
+                    draw: false,
+                    curve: null,
+                    radiusProfile: undefined
+                },
+                texture: {
+                    diffuseMap: null,
+                    normalMap: null
+                }
+            };
+            this.radiusProfile = 'No profile';
+            this.torsionAngle = 0;
+            this.velocityFactor = 1.0;
+            this.printFlag = false;
+            this.printing = false;
+            this.print = function(){
+                this.printFlag = true;
+                switch(this.radiusProfile) {
+
+                    case "C1":
+                        this.objectToPrint.extrusion.radiusProfile = 0;
+                        break;
+                    case "C2":
+                        this.objectToPrint.extrusion.radiusProfile = 1;
+                        break;
+                    case "C3":
+                        this.objectToPrint.extrusion.radiusProfile = 2;
+                        break;
+                    case "No profile":
+                        this.objectToPrint.extrusion.radiusProfile = undefined;
+
+                }
+                switch(this.objectToPrintString) {
+                    
+                    case "A1":
+                        this.objectToPrint.extrusion.draw = false;
+                        this.objectToPrint.revolution.draw = true;
+                        this.objectToPrint.revolution.curve = 0;
+                        break;
+                    case "A2":
+                        this.objectToPrint.extrusion.draw = false;
+                        this.objectToPrint.revolution.draw = true;
+                        this.objectToPrint.revolution.curve = 1;
+                        break;
+                    case "A3":
+                       this.objectToPrint.extrusion.draw = false;
+                       this.objectToPrint.revolution.draw = true;
+                       this.objectToPrint.revolution.curve = 2;
+                       break;
+                    case "B1":
+                        this.objectToPrint.revolution.draw = false;
+                        this.objectToPrint.extrusion.draw = true;
+                        this.objectToPrint.extrusion.curve = 0;
+                        break;
+                    case "B2":
+                        this.objectToPrint.revolution.draw = false;
+                        this.objectToPrint.extrusion.draw = true;
+                        this.objectToPrint.extrusion.curve = 1;
+                        break;
+                    case "B3":
+                       this.objectToPrint.revolution.draw = false;
+                       this.objectToPrint.extrusion.draw = true;
+                       this.objectToPrint.extrusion.curve = 2;
+                       break;
+
+                }
+                switch(this.diffuseMap) {
+
+                    case "Alicia":
+                        this.objectToPrint.texture.diffuseMap = textures["alicia"];
+                        this.objectToPrint.texture.normalMap = textures["alicia_normal"];
+                        break;
+                    case "Marble":
+                        this.objectToPrint.texture.diffuseMap = textures["marmol"];
+                        this.objectToPrint.texture.normalMap = textures["marmol_normal"];
+                        break;
+                    case "Gotas":
+                        this.objectToPrint.texture.diffuseMap = textures["gotas"];
+                        this.objectToPrint.texture.normalMap = textures["gotas_normal"];
+                        break;
+                    case "Wool":
+                        this.objectToPrint.texture.diffuseMap = textures["alfombraBlanca"];
+                        this.objectToPrint.texture.normalMap = textures["alfombraBlanca_normal"];
+                        break;
+                    case "No texture":
+                        this.objectToPrint.texture.diffuseMap = null;
+                        this.objectToPrint.texture.normalMap = null;
+                        break;
+                
+                }
+            };
+            this.lightIntensity1 = 0.4;
+            this.lightIntensity2 = 0.4;
+            this.lightIntensity3 = 0.4;
+            this.lightIntensity4 = 0.4;
+            this.diffuseMap = "Alicia";
+            this.diffuseMapIntensity = 1;
+            this.kd = [178.5, 178.5, 178.5];
+            this.ks = [255, 255, 255];
+            this.shininess = 10;
+        };
+        
+        var control = new Control();
+
+        </script>
+
+	</head>
+	<body onload="main()">
+	<div id="flex-container">
+		<canvas id="my_canvas" width="1440" height="900">
+			No WebGL.
+		</canvas>
+	</div>
+	</body>
+</html>
